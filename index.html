@@ -1238,23 +1238,39 @@ function login(userId) {
   const user = state.users.find(u => u.id === userId);
   if (!user) return;
 
-  // 玩家：防止重複登入
-  if (user.role !== 'admin' && _activeSessions[userId]) {
-    toast('此帳號已在其他裝置登入中');
+  // 管理員：密碼驗證後直接進入，不需要 session 追蹤
+  if (user.role === 'admin') {
+    if (state.requirePassword !== false) {
+      const pwd = prompt('請輸入管理員密碼：');
+      if (pwd !== '2012') { toast('密碼錯誤！'); return; }
+    }
+    state.currentUser = userId;
+    save();
+    enterMainView(user);
     return;
   }
 
-  // 密碼驗證：僅管理員需要
-  if (user.role === 'admin' && state.requirePassword !== false) {
-    const pwd = prompt('請輸入管理員密碼：');
-    if (pwd !== '2012') { toast('密碼錯誤！'); return; }
-  }
-
-  state.currentUser = userId;
-  // 玩家上線標記（管理員不需追蹤）
-  if (user.role !== 'admin') _markOnline(userId);
-  save();
-  enterMainView(user);
+  // 玩家：使用 Firebase transaction 原子性地搶佔 session
+  // 避免「_activeSessions 尚未載入」造成的時序競爭問題
+  SESSIONS_REF.child(userId).transaction(
+    function(current) {
+      // current !== null 表示已有裝置登入，中止 transaction
+      if (current !== null && current !== undefined) return; // abort
+      return true; // 搶佔成功，寫入 true
+    },
+    function(error, committed) {
+      if (error || !committed) {
+        toast('此帳號已在其他裝置登入中');
+        renderLogin(); // 刷新按鈕顯示為已鎖定
+        return;
+      }
+      // 搶佔成功：設定斷線自動清除
+      SESSIONS_REF.child(userId).onDisconnect().remove();
+      state.currentUser = userId;
+      save();
+      enterMainView(user);
+    }
+  );
 }
 
 function confirmNameChange() {
