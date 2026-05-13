@@ -3179,17 +3179,18 @@ STATE_REF.on('value', snapshot => {
       }
     });
 
-    // 從 localStorage 恢復此裝置上的登入狀態
+    // 每次開啟網址都從登入畫面開始，不恢復上次的登入狀態
+    // 若上次有殘留 session 標記，先清除（避免自己被鎖定）
     try {
       const local = JSON.parse(localStorage.getItem('hrapp_local') || '{}');
-      if (local.currentUser && state.users.find(u => u.id === local.currentUser)) {
-        state.currentUser = local.currentUser;
-        // 刷新頁面後重新標記線上狀態（僅玩家）
-        const restoredUser = state.users.find(u => u.id === local.currentUser);
-        if (restoredUser && restoredUser.role !== 'admin') _markOnline(local.currentUser);
+      if (local.currentUser) {
+        const prevUser = state.users.find(u => u.id === local.currentUser);
+        if (prevUser && prevUser.role !== 'admin') _markOffline(local.currentUser);
       }
-      if (local.pendingBets) state.pendingBets = local.pendingBets;
+      localStorage.removeItem('hrapp_local');
     } catch(e) {}
+    state.currentUser = null;
+    state.pendingBets = [];
 
     // 隱藏 loading 畫面
     const loadingEl = document.getElementById('loading-overlay');
@@ -3198,12 +3199,8 @@ STATE_REF.on('value', snapshot => {
     // 套用 UI 縮放（從 localStorage 讀取，預設 2.5x）
     applyFontScale();
 
-    // 渲染 App
-    if (state.currentUser) {
-      enterMainView(getUser());
-    } else {
-      renderLogin();
-    }
+    // 每次都從登入畫面開始
+    renderLogin();
 
   } else {
     // ── 後續更新：有其他人改了資料，同步本機狀態並重新渲染 ──
