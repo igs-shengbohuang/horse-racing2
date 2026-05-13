@@ -874,6 +874,13 @@ const FIREBASE_CONFIG = {
 };
 // ============================================================
 
+// Firebase 有時把陣列回傳成物件（{0:{...},1:{...}}），統一轉回真陣列
+function _toArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val.filter(v => v != null);
+  return Object.values(val).filter(v => v != null);
+}
+
 firebase.initializeApp(FIREBASE_CONFIG);
 const db = firebase.database();
 const STATE_REF    = db.ref('hrapp');
@@ -1154,7 +1161,14 @@ function renderLogin() {
     <h2>🐎 賽馬預測系統</h2>
     <p>選擇帳號開始遊戲</p>
     ${adminBtn}
-    ${teams.length === 0 && orphans.length === 0 ? '<div class="empty-state" style="margin:0 0 24px;">尚未設定任何組別<br><span style="font-size:calc(13px*var(--font-multiplier));margin-top:8px;display:inline-block;">請管理員登入後到「隊伍/玩家設定」建立組別</span></div>' : ''}
+    ${teams.length === 0 && orphans.length === 0 ? `
+      <div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:14px;padding:20px;margin-bottom:20px;text-align:left;">
+        <div style="font-size:calc(15px * var(--font-multiplier));font-weight:700;color:#166534;margin-bottom:8px;">⚙️ 尚未設定組別</div>
+        <div style="font-size:calc(13px * var(--font-multiplier));color:#15803d;line-height:1.7;">
+          請管理員先登入，進入「<b>隊伍/玩家</b>」頁面建立組別與玩家。<br>
+          設定完成後，其他裝置重新整理即可看到選單。
+        </div>
+      </div>` : ''}
     <div class="user-list" style="text-align:left;">${teamsHtml}${orphansHtml}</div>
   </div>`;
 }
@@ -1207,10 +1221,13 @@ function enterMainView(user) {
 
   if(user && user.role==='admin') {
     document.getElementById('admin-tab').style.display='';
+    // 若尚未設定任何隊伍，直接帶管理員到隊伍設定頁
+    const noTeams = (!state.teams || state.teams.length === 0);
+    switchTab(noTeams ? 'history' : 'races');
   } else {
     document.getElementById('admin-tab').style.display='none';
+    switchTab('races');
   }
-  switchTab('races');
 }
 
 function logout() {
@@ -2156,11 +2173,19 @@ function renderAdmin() {
 
     <!-- 危險區域 -->
     <p class="section-title" style="color:#dc2626;">🗑️ 危險區域</p>
+    <div class="admin-card" style="border-color:#fca5a5;background:#fff5f5;margin-bottom:10px;">
+      <div style="font-size:calc(14px * var(--font-multiplier));font-weight:600;color:#dc2626;margin-bottom:8px;">清除所有組別與玩家</div>
+      <div style="font-size:calc(13px * var(--font-multiplier));color:var(--color-text-secondary);margin-bottom:14px;line-height:1.5;">
+        刪除資料庫中所有組別與玩家帳號（保留管理員）。賽事、下注紀錄也會一併清除。<br>
+        <span style="color:#d97706;font-weight:600;">⚠ 此操作不可復原，請確認後再點擊。</span>
+      </div>
+      <button onclick="clearAllTeamsAndPlayers()" style="background:#dc2626;color:#fff;border:none;border-radius:var(--border-radius-sm);padding:10px 20px;font-size:calc(14px * var(--font-multiplier));font-weight:600;cursor:pointer;width:100%;">🗑️ 清除所有組別與玩家</button>
+    </div>
     <div class="admin-card" style="border-color:#fca5a5;background:#fff5f5;">
       <div style="font-size:calc(14px * var(--font-multiplier));font-weight:600;color:#dc2626;margin-bottom:8px;">清除所有賽事記錄</div>
       <div style="font-size:calc(13px * var(--font-multiplier));color:var(--color-text-secondary);margin-bottom:14px;line-height:1.5;">
-        刪除所有賽事紀錄與下注資料，並將所有隊伍積分重置為 <b>${getDefaultPoints()}</b>。<br>
-        <span style="color:#16a34a;font-weight:600;">✓ 馬匹名稱、賠率及二重彩賠率設定不受影響。</span>
+        刪除所有賽事紀錄與下注資料，並將所有玩家積分重置為 <b>${getDefaultPoints()}</b>。<br>
+        <span style="color:#16a34a;font-weight:600;">✓ 馬匹名稱、賠率、組別及玩家設定不受影響。</span>
       </div>
       <button onclick="clearAllData()" style="background:#dc2626;color:#fff;border:none;border-radius:var(--border-radius-sm);padding:10px 20px;font-size:calc(14px * var(--font-multiplier));font-weight:600;cursor:pointer;width:100%;">⚠️ 清除所有賽事記錄並重置積分</button>
     </div>
@@ -2819,6 +2844,25 @@ function toggleRequirePassword() {
   renderAdmin();
 }
 
+function clearAllTeamsAndPlayers() {
+  if (!confirm('⚠️ 確定要清除所有組別與玩家嗎？\n\n包含所有賽事與下注紀錄，此操作不可復原！')) return;
+  if (!confirm('再次確認：清除所有組別、玩家、賽事及下注？')) return;
+  // 只保留管理員帳號
+  state.users  = state.users.filter(u => u.role === 'admin');
+  state.teams  = [];
+  state.races  = [];
+  state.bets   = [];
+  state.activeRaceId = null;
+  state.pendingBets  = [];
+  _jpWinners.length = 0;
+  _jpSaveWinners();
+  _jpRenderList();
+  save();
+  try { localStorage.removeItem('hrapp_local'); } catch(e) {}
+  toast('✅ 所有組別與玩家已清除！請重新設定。');
+  renderAdmin();
+}
+
 function clearAllData() {
   if(!confirm('⚠️ 確定要清除所有賽事紀錄並重置所有隊伍積分嗎？\n\n此操作不可復原！')) return;
   const dp = getDefaultPoints();
@@ -3021,14 +3065,14 @@ STATE_REF.on('value', snapshot => {
     _fbInitialized = true;
 
     if (data) {
-      if (data.users) state.users = data.users;
-      state.teams = Array.isArray(data.teams) ? data.teams : (data.teams ? Object.values(data.teams) : []);
-      if (data.races) state.races = data.races;
-      if (data.bets) state.bets = data.bets;
+      if (data.users) state.users = _toArray(data.users);
+      state.teams = _toArray(data.teams);
+      if (data.races) state.races = _toArray(data.races);
+      if (data.bets) state.bets = _toArray(data.bets);
       if (data.activeRaceId !== undefined) state.activeRaceId = data.activeRaceId;
       if (data.requirePassword !== undefined) state.requirePassword = data.requirePassword;
       // 記錄初始賽事狀態（避免首次載入觸發動畫）
-      if (data.races) data.races.forEach(r => { _prevRaceStatuses[r.id] = r.status; });
+      if (state.races.length) state.races.forEach(r => { _prevRaceStatuses[r.id] = r.status; });
     }
 
     // ── 從 Firebase 載入全域設定（馬匹名稱、二重彩賠率）──
@@ -3086,10 +3130,10 @@ STATE_REF.on('value', snapshot => {
     const pb = state.pendingBet;
     const bt = state.currentBetType;
 
-    if (data.users) state.users = data.users;
-    state.teams = Array.isArray(data.teams) ? data.teams : (data.teams ? Object.values(data.teams) : []);
-    if (data.races) state.races = data.races;
-    if (data.bets) state.bets = data.bets;
+    if (data.users) state.users = _toArray(data.users);
+    state.teams = _toArray(data.teams);
+    if (data.races) state.races = _toArray(data.races);
+    if (data.bets) state.bets = _toArray(data.bets);
     if (data.activeRaceId !== undefined) state.activeRaceId = data.activeRaceId;
     if (data.requirePassword !== undefined) state.requirePassword = data.requirePassword;
 
