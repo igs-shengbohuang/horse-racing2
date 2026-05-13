@@ -885,7 +885,31 @@ firebase.initializeApp(FIREBASE_CONFIG);
 const db = firebase.database();
 const STATE_REF    = db.ref('hrapp');
 const SETTINGS_REF = db.ref('hrapp_settings'); // 全域設定（不被 clearAllData 清除）
-const STREAM_REF   = db.ref('hrapp_stream');   // WebRTC 信令節點
+const STREAM_REF    = db.ref('hrapp_stream');    // WebRTC 信令節點
+const SESSIONS_REF  = db.ref('hrapp_sessions'); // 線上登入狀態（裝置斷線自動清除）
+
+let _activeSessions = {}; // { userId: true } — 目前已登入裝置的玩家
+
+// 有裝置登入/登出時即時刷新登入畫面
+SESSIONS_REF.on('value', snap => {
+  _activeSessions = snap.val() || {};
+  const loginView = document.getElementById('login-view');
+  if (loginView && loginView.style.display !== 'none') renderLogin();
+});
+
+// 標記玩家上線（裝置斷線時 Firebase 自動刪除該紀錄）
+function _markOnline(userId) {
+  if (!userId) return;
+  const ref = SESSIONS_REF.child(userId);
+  ref.set(true);
+  ref.onDisconnect().remove();
+}
+// 標記玩家下線（主動登出時呼叫）
+function _markOffline(userId) {
+  if (!userId) return;
+  SESSIONS_REF.child(userId).onDisconnect().cancel();
+  SESSIONS_REF.child(userId).remove();
+}
 
 // ============================================================
 // 📹 WebRTC 直播系統（同 WiFi 低延遲，無需付費）
@@ -943,8 +967,34 @@ async function startBroadcast() {
     if (activeTab?.dataset.tab === 'admin') renderAdmin();
   } catch (err) {
     _isBroadcasting = false;
-    toast('❌ 無法取得攝影機：' + (err.message || err));
-    console.error('broadcast error', err);
+    const name = err.name || '';
+    let msg = '❌ 無法開啟攝影機';
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+      msg = '❌ 相機權限被拒絕\n\niOS：設定 → Safari → 相機 → 允許\nAndroid：設定 → 應用程式 → Chrome → 權限 → 相機';
+    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      msg = '❌ 找不到相機裝置，請確認此裝置有相機';
+    } else if (name === 'NotSupportedError' || name === 'NotReadableError') {
+      msg = '❌ 瀏覽器不支援相機存取\n\n請改用 Safari（iOS）或 Chrome（Android）開啟，並確認網址為 https://';
+    } else if (name === 'OverconstrainedError') {
+      msg = '❌ 相機設定不符合，嘗試放寬條件中...';
+      // 降級嘗試：只要視訊，不指定任何限制
+      try {
+        _localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        _isBroadcasting = true;
+        const preview = document.getElementById('broadcast-preview');
+        if (preview) { preview.srcObject = _localStream; preview.style.display = 'block'; }
+        await STREAM_REF.set({ status: 'live' });
+        STREAM_REF.child('viewers').on('child_added', async snap => { /* 同上邏輯 */ });
+        toast('📹 直播已開始（僅視訊，無音訊）');
+        const activeTab = document.querySelector('.tab.active');
+        if (activeTab?.dataset.tab === 'admin') renderAdmin();
+        return;
+      } catch(e2) { msg = '❌ 相機完全無法存取：' + (e2.message || e2); }
+    } else {
+      msg = '❌ 相機錯誤：' + (err.message || name || err);
+    }
+    alert(msg);
+    console.error('broadcast error', err.name, err.message);
   }
 }
 
@@ -1127,14 +1177,24 @@ function renderLogin() {
   const teamsHtml = teams.map(team => {
     const players = state.users.filter(u => u.teamId === team.id);
     const total = players.reduce((s, u) => s + (u.points || 0), 0);
-    const playersHtml = players.map(p => `
-      <button class="user-btn" onclick="login('${p.id}')" style="padding:10px 14px;">
-        <div style="width:32px;height:32px;border-radius:50%;background:${COLORS[p.color%COLORS.length]};color:${TEXT_COLORS[p.color%TEXT_COLORS.length]};display:flex;align-items:center;justify-content:center;font-size:calc(14px * var(--font-multiplier));font-weight:700;flex-shrink:0;">${p.name[0]}</div>
-        <div class="info">
-          <div class="name">${p.name}</div>
-          <div class="role">餘額：${p.points} pts</div>
-        </div>
-      </button>`).join('');
+    const playersHtml = players.map(p => {
+      const online = !!_activeSessions[p.id];
+      return online
+        ? `<div class="user-btn" style="padding:10px 14px;opacity:0.55;cursor:not-allowed;background:#f3f4f6;">
+            <div style="width:32px;height:32px;border-radius:50%;background:${COLORS[p.color%COLORS.length]};color:${TEXT_COLORS[p.color%TEXT_COLORS.length]};display:flex;align-items:center;justify-content:center;font-size:calc(14px * var(--font-multiplier));font-weight:700;flex-shrink:0;">${p.name[0]}</div>
+            <div class="info">
+              <div class="name">${p.name} <span style="font-size:calc(11px * var(--font-multiplier));color:#16a34a;font-weight:600;background:#dcfce7;padding:2px 7px;border-radius:20px;margin-left:4px;">● 已登入</span></div>
+              <div class="role">餘額：${p.points} pts</div>
+            </div>
+          </div>`
+        : `<button class="user-btn" onclick="login('${p.id}')" style="padding:10px 14px;">
+            <div style="width:32px;height:32px;border-radius:50%;background:${COLORS[p.color%COLORS.length]};color:${TEXT_COLORS[p.color%TEXT_COLORS.length]};display:flex;align-items:center;justify-content:center;font-size:calc(14px * var(--font-multiplier));font-weight:700;flex-shrink:0;">${p.name[0]}</div>
+            <div class="info">
+              <div class="name">${p.name}</div>
+              <div class="role">餘額：${p.points} pts</div>
+            </div>
+          </button>`;
+    }).join('');
     return `
       <div style="margin-bottom:20px;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:8px 12px;background:${COLORS[team.color%COLORS.length]};border-radius:10px;">
@@ -1150,11 +1210,12 @@ function renderLogin() {
   const orphansHtml = orphans.length ? `
     <div style="margin-bottom:20px;">
       <div style="font-size:calc(13px * var(--font-multiplier));color:#9ca3af;margin-bottom:8px;padding-left:4px;">── 未分組玩家 ──</div>
-      ${orphans.map(p=>`
-        <button class="user-btn" onclick="login('${p.id}')">
-          ${avatar(p)}
-          <div class="info"><div class="name">${p.name}</div><div class="role">餘額：${p.points} pts</div></div>
-        </button>`).join('')}
+      ${orphans.map(p => {
+        const online = !!_activeSessions[p.id];
+        return online
+          ? `<div class="user-btn" style="opacity:0.55;cursor:not-allowed;background:#f3f4f6;">${avatar(p)}<div class="info"><div class="name">${p.name} <span style="font-size:calc(11px*var(--font-multiplier));color:#16a34a;font-weight:600;background:#dcfce7;padding:2px 7px;border-radius:20px;margin-left:4px;">● 已登入</span></div><div class="role">餘額：${p.points} pts</div></div></div>`
+          : `<button class="user-btn" onclick="login('${p.id}')">${avatar(p)}<div class="info"><div class="name">${p.name}</div><div class="role">餘額：${p.points} pts</div></div></button>`;
+      }).join('')}
     </div>` : '';
 
   v.innerHTML = `<div class="login-screen">
@@ -1174,17 +1235,24 @@ function renderLogin() {
 }
 
 function login(userId) {
-  const user = state.users.find(u=>u.id===userId);
-  
-  if (user && user.role === 'admin' && state.requirePassword !== false) {
+  const user = state.users.find(u => u.id === userId);
+  if (!user) return;
+
+  // 玩家：防止重複登入
+  if (user.role !== 'admin' && _activeSessions[userId]) {
+    toast('此帳號已在其他裝置登入中');
+    return;
+  }
+
+  // 密碼驗證：僅管理員需要
+  if (user.role === 'admin' && state.requirePassword !== false) {
     const pwd = prompt('請輸入管理員密碼：');
-    if (pwd !== '2012') {
-      toast('密碼錯誤！');
-      return;
-    }
+    if (pwd !== '2012') { toast('密碼錯誤！'); return; }
   }
 
   state.currentUser = userId;
+  // 玩家上線標記（管理員不需追蹤）
+  if (user.role !== 'admin') _markOnline(userId);
   save();
   enterMainView(user);
 }
@@ -1231,14 +1299,10 @@ function enterMainView(user) {
 }
 
 function logout() {
-  if (state.requirePassword !== false) {
-    const pwd = prompt('請輸入登出密碼：');
-    if (pwd !== '2012') {
-      toast('密碼錯誤！無法登出');
-      return;
-    }
-  }
-
+  const user = getUser();
+  // 玩家：直接登出，無需密碼
+  // 管理員：不需要密碼（密碼只保護登入，不限制登出）
+  if (user && user.role !== 'admin') _markOffline(user.id);
   state.currentUser = null;
   state.pendingBets = [];
   try { localStorage.removeItem('hrapp_local'); } catch(e) {}
@@ -2858,6 +2922,7 @@ function clearAllTeamsAndPlayers() {
   _jpSaveWinners();
   _jpRenderList();
   save();
+  SESSIONS_REF.set(null); // 清除所有線上狀態，避免殘留「已登入」標記
   try { localStorage.removeItem('hrapp_local'); } catch(e) {}
   toast('✅ 所有組別與玩家已清除！請重新設定。');
   renderAdmin();
@@ -3103,6 +3168,9 @@ STATE_REF.on('value', snapshot => {
       const local = JSON.parse(localStorage.getItem('hrapp_local') || '{}');
       if (local.currentUser && state.users.find(u => u.id === local.currentUser)) {
         state.currentUser = local.currentUser;
+        // 刷新頁面後重新標記線上狀態（僅玩家）
+        const restoredUser = state.users.find(u => u.id === local.currentUser);
+        if (restoredUser && restoredUser.role !== 'admin') _markOnline(local.currentUser);
       }
       if (local.pendingBets) state.pendingBets = local.pendingBets;
     } catch(e) {}
