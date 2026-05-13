@@ -408,6 +408,32 @@
     box-shadow: 0 5px 20px rgba(0,0,0,0.25); z-index: 500;
   }
 
+  /* ── WebRTC 直播 ── */
+  #stream-overlay {
+    position: fixed; bottom: 90px; right: 14px; z-index: 9980;
+    background: #000; border-radius: 14px; overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+    width: 220px; display: none; flex-direction: column;
+    border: 2px solid rgba(239,68,68,0.6);
+  }
+  #stream-overlay.maximized { width: min(90vw, 480px); bottom: 50%; right: 50%; transform: translate(50%, 50%); }
+  #stream-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 10px; background: rgba(0,0,0,0.6); cursor: default;
+  }
+  #stream-video { width: 100%; display: block; max-height: 160px; object-fit: cover; background:#111; }
+  #stream-overlay.maximized #stream-video { max-height: 60vh; }
+  @keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .live-dot { width:9px;height:9px;border-radius:50%;background:#ef4444;animation:live-pulse 1.2s infinite;flex-shrink:0; }
+  #stream-fab {
+    position: fixed; bottom: 90px; right: 14px; z-index: 9979;
+    background: #ef4444; color: #fff; border: none; border-radius: 50px;
+    padding: 8px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(239,68,68,0.5); display: none;
+    align-items: center; gap: 6px;
+  }
+  #broadcast-preview { width:100%; border-radius:8px; background:#000; max-height:180px; object-fit:cover; display:none; }
+
   /* ── JP 得獎記錄面板 ── */
   #jp-list-panel {
     position: absolute; top: 74px; right: 20px; z-index: 500;
@@ -673,14 +699,14 @@
     </div>
     <div class="form-row" style="margin-top: 24px;">
       <label>下注點數</label>
-      <div class="chip-row">
-        <button class="chip" onclick="addChip(10)">+10</button>
-        <button class="chip" onclick="addChip(50)">+50</button>
-        <button class="chip" onclick="addChip(100)">+100</button>
-        <button class="chip" onclick="addChip(500)">+500</button>
+      <div class="chip-row" id="chip-row">
+        <button class="chip" onclick="setChip(100)">100</button>
+        <button class="chip" onclick="setChip(200)">200</button>
+        <button class="chip" onclick="setChip(500)">500</button>
+        <button class="chip" onclick="setChip(1000)">1000</button>
         <button class="chip" onclick="setChip(0)">清除</button>
       </div>
-      <input type="number" id="modal-amount" placeholder="輸入點數..." min="1" oninput="updatePayout()" style="font-size:calc(16px * var(--font-multiplier)); padding:12px 14px;">
+      <input type="number" id="modal-amount" placeholder="輸入點數..." min="1" oninput="updatePayout()" onblur="enforceMinBet()" style="font-size:calc(16px * var(--font-multiplier)); padding:12px 14px;">
     </div>
     <div class="payout-row">
       <span class="payout-label">預計最高回報</span>
@@ -691,6 +717,26 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- 📹 直播浮動視窗（觀看端） -->
+<div id="stream-overlay">
+  <div id="stream-header">
+    <div style="display:flex;align-items:center;gap:6px;">
+      <div class="live-dot"></div>
+      <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:1px;">LIVE</span>
+    </div>
+    <div style="display:flex;gap:4px;">
+      <button onclick="_toggleStreamMax()" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:17px;line-height:1;padding:2px 5px;" title="最大化">⛶</button>
+      <button onclick="_closeStreamOverlay()" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:20px;line-height:1;padding:2px 5px;" title="最小化">−</button>
+    </div>
+  </div>
+  <video id="stream-video" autoplay playsinline muted style="width:100%;display:block;max-height:160px;object-fit:cover;background:#111;"></video>
+</div>
+
+<!-- 📹 直播 FAB（關閉後顯示，點擊重開） -->
+<button id="stream-fab" onclick="_openStreamOverlay()">
+  <div class="live-dot"></div> LIVE 直播
+</button>
 
 <!-- 連線中畫面 -->
 <div id="loading-overlay" style="position:fixed;inset:0;background:#fff;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;">
@@ -796,13 +842,9 @@ function saveDefaultPoints(val) {
 
 let state = {
   users: [
-    {id:'admin',name:'管理員',role:'admin',points:0,color:0, nameChanged: true},
-    {id:'u1',name:'第一組',role:'player',points:1000,color:1, nameChanged: false},
-    {id:'u2',name:'第二組',role:'player',points:1000,color:2, nameChanged: false},
-    {id:'u3',name:'第三組',role:'player',points:1000,color:3, nameChanged: false},
-    {id:'u4',name:'第四組',role:'player',points:1000,color:4, nameChanged: false},
-    {id:'u5',name:'第五組',role:'player',points:1000,color:5, nameChanged: false},
+    {id:'admin',name:'管理員',role:'admin',points:0,color:0},
   ],
+  teams: [],   // [{id, name, color}]  玩家透過 user.teamId 關聯
   races: [
     {id:'r1',name:'第一場 精英盃',time:'14:30',status:'open',
      horses: DEFAULT_HORSES.map((h, i) => ({ id: 'h' + i, ...h })),
@@ -836,6 +878,160 @@ firebase.initializeApp(FIREBASE_CONFIG);
 const db = firebase.database();
 const STATE_REF    = db.ref('hrapp');
 const SETTINGS_REF = db.ref('hrapp_settings'); // 全域設定（不被 clearAllData 清除）
+const STREAM_REF   = db.ref('hrapp_stream');   // WebRTC 信令節點
+
+// ============================================================
+// 📹 WebRTC 直播系統（同 WiFi 低延遲，無需付費）
+// ============================================================
+const _ICE_CFG = { iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}] };
+let _localStream    = null;       // 直播端攝影機串流
+let _peerConns      = {};         // {viewerId: RTCPeerConnection}
+let _viewerPC       = null;       // 觀看端連線
+let _isBroadcasting = false;
+const _myViewerId   = 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+
+// ── 直播端：開始直播 ──
+async function startBroadcast() {
+  if (_isBroadcasting) { toast('直播已在進行中'); return; }
+  try {
+    _localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    _isBroadcasting = true;
+    const preview = document.getElementById('broadcast-preview');
+    if (preview) { preview.srcObject = _localStream; preview.style.display = 'block'; }
+
+    await STREAM_REF.set({ status: 'live', viewers: null, offers: null, answers: null,
+      bc_candidates: null, viewer_candidates: null });
+
+    // 監聽新觀看者加入
+    STREAM_REF.child('viewers').on('child_added', async snap => {
+      const vid = snap.key;
+      if (_peerConns[vid]) return;
+      const pc = new RTCPeerConnection(_ICE_CFG);
+      _peerConns[vid] = pc;
+      _localStream.getTracks().forEach(t => pc.addTrack(t, _localStream));
+      pc.onicecandidate = e => {
+        if (e.candidate) STREAM_REF.child('bc_candidates/' + vid).push(e.candidate.toJSON());
+      };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      STREAM_REF.child('offers/' + vid).set({ sdp: offer.sdp, type: offer.type });
+      STREAM_REF.child('answers/' + vid).on('value', async s2 => {
+        const a = s2.val();
+        if (a && !pc.remoteDescription) await pc.setRemoteDescription(new RTCSessionDescription(a));
+      });
+      STREAM_REF.child('viewer_candidates/' + vid).on('child_added', s3 => {
+        const c = s3.val();
+        if (c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+      });
+    });
+
+    // 監聽觀看者離開
+    STREAM_REF.child('viewers').on('child_removed', snap => {
+      const vid = snap.key;
+      if (_peerConns[vid]) { _peerConns[vid].close(); delete _peerConns[vid]; }
+    });
+
+    toast('📹 直播已開始！其他裝置會自動收到畫面');
+    const activeTab = document.querySelector('.tab.active');
+    if (activeTab?.dataset.tab === 'admin') renderAdmin();
+  } catch (err) {
+    _isBroadcasting = false;
+    toast('❌ 無法取得攝影機：' + (err.message || err));
+    console.error('broadcast error', err);
+  }
+}
+
+// ── 直播端：停止直播 ──
+function stopBroadcast() {
+  if (!confirm('確定要停止直播嗎？')) return;
+  _isBroadcasting = false;
+  if (_localStream) { _localStream.getTracks().forEach(t => t.stop()); _localStream = null; }
+  Object.values(_peerConns).forEach(pc => pc.close());
+  _peerConns = {};
+  STREAM_REF.off(); STREAM_REF.set(null);
+  const preview = document.getElementById('broadcast-preview');
+  if (preview) { preview.srcObject = null; preview.style.display = 'none'; }
+  toast('⏹️ 直播已停止');
+  const activeTab = document.querySelector('.tab.active');
+  if (activeTab?.dataset.tab === 'admin') renderAdmin();
+}
+
+// ── 觀看端：加入直播 ──
+async function _joinStream() {
+  if (_viewerPC) return;
+  STREAM_REF.child('viewers/' + _myViewerId).set({ joined: Date.now() });
+  const pc = new RTCPeerConnection(_ICE_CFG);
+  _viewerPC = pc;
+  pc.onicecandidate = e => {
+    if (e.candidate) STREAM_REF.child('viewer_candidates/' + _myViewerId).push(e.candidate.toJSON());
+  };
+  pc.ontrack = e => {
+    const v = document.getElementById('stream-video');
+    if (v) { v.srcObject = e.streams[0]; v.muted = false; }
+    _openStreamOverlay();
+  };
+  pc.onconnectionstatechange = () => {
+    if (['failed','disconnected','closed'].includes(pc.connectionState)) _leaveStream();
+  };
+  STREAM_REF.child('offers/' + _myViewerId).on('value', async snap => {
+    const o = snap.val();
+    if (!o || pc.remoteDescription) return;
+    await pc.setRemoteDescription(new RTCSessionDescription(o));
+    const ans = await pc.createAnswer();
+    await pc.setLocalDescription(ans);
+    STREAM_REF.child('answers/' + _myViewerId).set({ sdp: ans.sdp, type: ans.type });
+  });
+  STREAM_REF.child('bc_candidates/' + _myViewerId).on('child_added', snap => {
+    const c = snap.val();
+    if (c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+  });
+}
+
+// ── 觀看端：離開 ──
+function _leaveStream() {
+  if (_viewerPC) { _viewerPC.close(); _viewerPC = null; }
+  STREAM_REF.child('viewers/' + _myViewerId).remove();
+  STREAM_REF.child('viewer_candidates/' + _myViewerId).remove();
+  STREAM_REF.child('answers/' + _myViewerId).remove();
+  const v = document.getElementById('stream-video');
+  if (v) v.srcObject = null;
+}
+
+// ── 浮動視窗控制 ──
+function _openStreamOverlay() {
+  const ov = document.getElementById('stream-overlay');
+  const fab = document.getElementById('stream-fab');
+  if (ov) { ov.style.display = 'flex'; }
+  if (fab) fab.style.display = 'none';
+}
+function _closeStreamOverlay() {
+  const ov = document.getElementById('stream-overlay');
+  const fab = document.getElementById('stream-fab');
+  if (ov) ov.style.display = 'none';
+  if (fab) fab.style.display = 'flex';
+}
+function _toggleStreamMax() {
+  const ov = document.getElementById('stream-overlay');
+  if (ov) ov.classList.toggle('maximized');
+}
+
+// ── 監聽全域直播狀態 ──
+STREAM_REF.child('status').on('value', snap => {
+  const isLive = snap.val() === 'live';
+  const fab = document.getElementById('stream-fab');
+  const overlay = document.getElementById('stream-overlay');
+  const user = typeof getUser === 'function' ? getUser() : null;
+  const isAdmin = user && user.role === 'admin';
+
+  if (isLive && !isAdmin && !_isBroadcasting) {
+    if (fab) fab.style.display = 'flex';
+    if (!_viewerPC) _joinStream();
+  } else if (!isLive) {
+    if (fab) fab.style.display = 'none';
+    if (overlay) overlay.style.display = 'none';
+    _leaveStream();
+  }
+});
 
 // ─── 文字縮放：每個裝置獨立儲存，預設 2.5x（只縮放文字，不縮放佈局） ──────
 function getFontScale() {
@@ -864,6 +1060,7 @@ document.documentElement.style.setProperty('--font-multiplier', getFontScale());
 function save() {
   STATE_REF.set({
     users: state.users,
+    teams: state.teams || [],
     races: state.races,
     bets: state.bets,
     activeRaceId: state.activeRaceId !== undefined ? state.activeRaceId : null,
@@ -906,33 +1103,60 @@ function avatar(user) {
 
 function renderLogin() {
   const v = document.getElementById('login-view');
+  const teams = state.teams || [];
+
+  // 管理員按鈕
+  const adminUser = state.users.find(u => u.role === 'admin');
+  const adminBtn = adminUser ? `
+    <button class="user-btn" onclick="login('${adminUser.id}')" style="border:2px solid #e0e7ff;background:#f5f3ff;margin-bottom:20px;">
+      ${avatar(adminUser)}
+      <div class="info">
+        <div class="name">${adminUser.name} <span class="admin-badge">管理員</span></div>
+        <div class="role">後台管理員</div>
+      </div>
+    </button>` : '';
+
+  // 各組列表
+  const teamsHtml = teams.map(team => {
+    const players = state.users.filter(u => u.teamId === team.id);
+    const total = players.reduce((s, u) => s + (u.points || 0), 0);
+    const playersHtml = players.map(p => `
+      <button class="user-btn" onclick="login('${p.id}')" style="padding:10px 14px;">
+        <div style="width:32px;height:32px;border-radius:50%;background:${COLORS[p.color%COLORS.length]};color:${TEXT_COLORS[p.color%TEXT_COLORS.length]};display:flex;align-items:center;justify-content:center;font-size:calc(14px * var(--font-multiplier));font-weight:700;flex-shrink:0;">${p.name[0]}</div>
+        <div class="info">
+          <div class="name">${p.name}</div>
+          <div class="role">餘額：${p.points} pts</div>
+        </div>
+      </button>`).join('');
+    return `
+      <div style="margin-bottom:20px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:8px 12px;background:${COLORS[team.color%COLORS.length]};border-radius:10px;">
+          <span style="font-size:calc(15px * var(--font-multiplier));font-weight:700;color:${TEXT_COLORS[team.color%TEXT_COLORS.length]};">🏳️ ${team.name}</span>
+          <span style="font-size:calc(12px * var(--font-multiplier));color:${TEXT_COLORS[team.color%TEXT_COLORS.length]};margin-left:auto;">總積分 ${total} pts</span>
+        </div>
+        <div style="display:grid;gap:8px;">${playersHtml || '<div style="text-align:center;padding:10px;color:#9ca3af;font-size:calc(13px*var(--font-multiplier));">此組尚無玩家</div>'}</div>
+      </div>`;
+  }).join('');
+
+  // 未分組玩家（舊資料相容）
+  const orphans = state.users.filter(u => u.role !== 'admin' && !u.teamId);
+  const orphansHtml = orphans.length ? `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:calc(13px * var(--font-multiplier));color:#9ca3af;margin-bottom:8px;padding-left:4px;">── 未分組玩家 ──</div>
+      ${orphans.map(p=>`
+        <button class="user-btn" onclick="login('${p.id}')">
+          ${avatar(p)}
+          <div class="info"><div class="name">${p.name}</div><div class="role">餘額：${p.points} pts</div></div>
+        </button>`).join('')}
+    </div>` : '';
+
   v.innerHTML = `<div class="login-screen">
     <h2>🐎 賽馬預測系統</h2>
-    <p>選擇你的帳號開始遊戲</p>
-    <div class="user-list">${state.users.map(u=>`
-      <button class="user-btn" onclick="login('${u.id}')">
-        ${avatar(u)}
-        <div class="info">
-          <div class="name">${u.name} ${u.role==='admin'?'<span class="admin-badge">管理員</span>':''}</div>
-          ${u.role==='admin' ? `<div class="role">後台管理員</div>` : `<div class="role">目前餘額：${u.points} pts</div>`}
-        </div>
-      </button>`).join('')}
-    </div>
-    <div class="add-user-row">
-      <input type="text" id="new-user-name" placeholder="新增隊伍名稱...">
-      <button class="btn-primary" style="margin-top:0; width:auto;" onclick="addUser()">加入</button>
-    </div>
+    <p>選擇帳號開始遊戲</p>
+    ${adminBtn}
+    ${teams.length === 0 && orphans.length === 0 ? '<div class="empty-state" style="margin:0 0 24px;">尚未設定任何組別<br><span style="font-size:calc(13px*var(--font-multiplier));margin-top:8px;display:inline-block;">請管理員登入後到「隊伍/玩家設定」建立組別</span></div>' : ''}
+    <div class="user-list" style="text-align:left;">${teamsHtml}${orphansHtml}</div>
   </div>`;
-}
-
-function addUser() {
-  const input = document.getElementById('new-user-name');
-  const name = input.value.trim();
-  if(!name) return;
-  const id = 'u'+Date.now();
-  state.users.push({id,name,role:'player',points:1000,color:state.users.length%COLORS.length, nameChanged: true});
-  save(); input.value=''; renderLogin();
-  toast('隊伍已新增');
 }
 
 function login(userId) {
@@ -973,10 +1197,13 @@ function enterMainView(user) {
   document.getElementById('login-view').style.display='none';
   document.getElementById('main-view').style.display='block';
 
-  // 切換 slip tab 標籤：管理員看「賠率表」，隊伍看「投注單」
+  // 切換 slip tab 標籤：管理員看「賠率表」，玩家看「投注單」
   const slipTab = document.querySelector('.tab[data-tab="slip"]');
   if (slipTab) slipTab.textContent = (user && user.role==='admin') ? '賠率表' : '投注單';
 
+  // 切換 history tab 標籤：管理員看「隊伍/玩家設定」，玩家看「紀錄」
+  const histTab = document.querySelector('.tab[data-tab="history"]');
+  if (histTab) histTab.textContent = (user && user.role==='admin') ? '隊伍/玩家' : '紀錄';
 
   if(user && user.role==='admin') {
     document.getElementById('admin-tab').style.display='';
@@ -1046,11 +1273,13 @@ function renderRaces() {
     <div class="user-bar">
       <div style="font-size:calc(16px * var(--font-multiplier));font-weight:600;display:flex;align-items:center;gap:8px;">
         ${avatar(user)}
-        ${user.name}
+        <div>
+          <div>${user.name}</div>
+          ${(()=>{ const t = user.teamId ? (state.teams||[]).find(t=>t.id===user.teamId) : null; return t ? `<div style="font-size:calc(11px * var(--font-multiplier));font-weight:400;color:var(--color-text-secondary);margin-top:1px;">${t.name}</div>` : ''; })()}
+        </div>
       </div>
       <div style="display:flex;gap:12px;align-items:center">
         ${userPointsHtml}
-        ${user.role==='player'&&!user.nameChanged ? `<button class="btn-sm" style="background:#eff6ff;border-color:#bfdbfe;color:#2563eb;" onclick="openNameModal()">✏️ 改名</button>` : ''}
         ${user.role==='player' ? `<button class="btn-sm" style="background:var(--color-background-secondary); border:none;" onclick="logout()">登出</button>` : ''}
       </div>
     </div>
@@ -1103,11 +1332,11 @@ function raceCard(race) {
     else if(lk) { bg='#2563eb';tc='#fff';br='#2563eb';cur='default'; }
     else if(!canBet){ bg='#f3f4f6';tc='#9ca3af';br='#e5e7eb'; }
     const oc = canBet&&!lk ? `onclick="openBet('${race.id}','${h.id}','win')"` : '';
-    return `<div class="win-cell" style="background:${bg};color:${tc};border:1.5px solid ${br};border-radius:8px;padding:6px 3px;text-align:center;cursor:${cur};flex:1;min-width:0;user-select:none;" ${oc}>
-      <div class="wc-num" style="font-size:calc(9px * var(--font-multiplier));font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 2px;">${resultMap[h.id]||''}${h.name}</div>
-      <div class="wc-odds" style="font-size:calc(13px * var(--font-multiplier));font-weight:700;line-height:1.2;">${h.odds}x</div>
-      ${pd?`<div style="font-size:calc(10px * var(--font-multiplier));margin-top:1px;">✏️${pd.amount}</div>`:''}
-      ${lk?`<div style="font-size:calc(10px * var(--font-multiplier));margin-top:1px;">✔${lk.amount}</div>`:''}
+    return `<div class="win-cell" style="background:${bg};color:${tc};border:1.5px solid ${br};border-radius:8px;padding:8px 4px;text-align:center;cursor:${cur};flex:0 0 auto;width:72px;user-select:none;" ${oc}>
+      <div class="wc-num" style="font-size:calc(9px * var(--font-multiplier));font-weight:700;line-height:1.3;word-break:break-all;padding:0 2px;">${resultMap[h.id]||''}${h.name}</div>
+      <div class="wc-odds" style="font-size:calc(13px * var(--font-multiplier));font-weight:700;line-height:1.3;margin-top:2px;">${h.odds}x</div>
+      ${pd?`<div style="font-size:calc(10px * var(--font-multiplier));margin-top:2px;">✏️${pd.amount}</div>`:''}
+      ${lk?`<div style="font-size:calc(10px * var(--font-multiplier));margin-top:2px;">✔${lk.amount}</div>`:''}
     </div>`;
   }).join('');
 
@@ -1155,7 +1384,9 @@ function raceCard(race) {
       <!-- 內容層 -->
       <div style="position:relative;z-index:2;">
         <div style="font-size:calc(12px * var(--font-multiplier));font-weight:700;color:#111827;margin-bottom:6px;display:inline-block;background:rgba(255,255,255,0.85);padding:2px 8px;border-radius:6px;">🏆 獨贏（點格下注）</div>
-        <div style="display:flex;gap:4px;margin-bottom:14px;">${winCells}</div>
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:14px;padding-bottom:4px;">
+          <div style="display:flex;gap:4px;width:max-content;">${winCells}</div>
+        </div>
         <div style="font-size:calc(12px * var(--font-multiplier));font-weight:700;color:#111827;margin-bottom:4px;display:inline-block;background:rgba(255,255,255,0.85);padding:2px 8px;border-radius:6px;">🔗 連贏（點格下注）</div>
         <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
           <table style="border-collapse:separate;border-spacing:0;width:100%;"><thead><tr>${colH}</tr></thead><tbody>${qRows}</tbody></table>
@@ -1186,6 +1417,7 @@ function openBet(raceId, horseId, type='win', horseId2=null) {
 
   const existingWin = (state.pendingBets||[]).find(b=>b.raceId===raceId&&b.horseId===horseId&&b.type==='win');
 
+  const user = getUser();
   if(initialType === 'quinella') {
     // 用 canonical key 精確比對組合，避免誤抓其他組合的資料
     const pairKey = horseId2 ? quinellaKey(horseId, horseId2) : null;
@@ -1200,7 +1432,8 @@ function openBet(raceId, horseId, type='win', horseId2=null) {
       // 新組合：直接用點擊格子傳入的兩匹馬（鎖定，不可更改）
       document.getElementById('modal-horse1').value = horseId;
       document.getElementById('modal-horse2').value = horseId2 || (race.horses.find(h=>h.id!==horseId)?.id || '');
-      document.getElementById('modal-amount').value = '';
+      // 預設金額：餘額足夠時填入最低下注金額
+      document.getElementById('modal-amount').value = user.points >= MIN_BET_QUINELLA ? MIN_BET_QUINELLA : '';
     }
     // 把選中的馬名填入顯示用 label（select 隱藏，使用者看到的是鎖定的馬名）
     const h1Name = race.horses.find(h=>h.id===document.getElementById('modal-horse1').value)?.name || '';
@@ -1211,8 +1444,10 @@ function openBet(raceId, horseId, type='win', horseId2=null) {
     document.getElementById('modal-horse1').value = horseId;
     const other = race.horses.find(h=>h.id!==horseId);
     if(other) document.getElementById('modal-horse2').value = other.id;
-    document.getElementById('modal-amount').value = existingWin ? existingWin.amount : '';
+    // 預設金額：若有既有下注則沿用，否則餘額足夠時填最低金額
+    document.getElementById('modal-amount').value = existingWin ? existingWin.amount : (user.points >= MIN_BET_WIN ? MIN_BET_WIN : '');
   }
+  _refreshChips(initialType);
 
   document.querySelectorAll('.bet-type-tab').forEach(t=>t.classList.toggle('active',t.dataset.type===initialType));
   document.getElementById('modal-win-horse-row').style.display  = initialType==='win'    ? '' : 'none';
@@ -1233,7 +1468,56 @@ function selectBetType(type, btn) {
   document.querySelectorAll('.bet-type-tab').forEach(t=>t.classList.toggle('active',t===btn));
   document.getElementById('modal-win-horse-row').style.display  = type==='win'    ? '' : 'none';
   document.getElementById('modal-quinella-section').style.display = type==='quinella' ? '' : 'none';
+  _refreshChips(type);
+  // 切換下注類型時，若輸入框為空，預設填入最低下注金額（餘額足夠時）
+  const user = getUser();
+  const minBet = _getMinBet(type);
+  const inp = document.getElementById('modal-amount');
+  if (!inp.value && user.points >= minBet) { inp.value = minBet; }
   updatePayout();
+}
+
+// ── 最低下注金額設定 ──
+const MIN_BET_WIN      = 100;
+const MIN_BET_QUINELLA = 200;
+
+function _getMinBet(type) {
+  return type === 'quinella' ? MIN_BET_QUINELLA : MIN_BET_WIN;
+}
+
+// 依下注類型更新 chip 快選列
+function _refreshChips(type) {
+  const row = document.getElementById('chip-row');
+  if (!row) return;
+  if (type === 'quinella') {
+    row.innerHTML =
+      `<button class="chip" onclick="setChip(200)">200</button>
+       <button class="chip" onclick="setChip(500)">500</button>
+       <button class="chip" onclick="setChip(1000)">1000</button>
+       <button class="chip" onclick="setChip(2000)">2000</button>
+       <button class="chip" onclick="setChip(0)">清除</button>`;
+  } else {
+    row.innerHTML =
+      `<button class="chip" onclick="setChip(100)">100</button>
+       <button class="chip" onclick="setChip(200)">200</button>
+       <button class="chip" onclick="setChip(500)">500</button>
+       <button class="chip" onclick="setChip(1000)">1000</button>
+       <button class="chip" onclick="setChip(0)">清除</button>`;
+  }
+}
+
+// 離開輸入框時，若餘額足夠最低下注，自動修正至最低下注金額
+function enforceMinBet() {
+  const type   = state.currentBetType || 'win';
+  const minBet = _getMinBet(type);
+  const user   = getUser();
+  const inp    = document.getElementById('modal-amount');
+  const val    = parseInt(inp.value) || 0;
+  // 只有餘額 >= 最低下注時才強制限制
+  if (user.points >= minBet && val > 0 && val < minBet) {
+    inp.value = minBet;
+    updatePayout();
+  }
 }
 
 function addChip(n) {
@@ -1370,6 +1654,15 @@ function confirmBet() {
   const user = getUser();
   const amount = parseInt(document.getElementById('modal-amount').value)||0;
   if(!amount||amount<1) { toast('請輸入下注點數'); return; }
+  // 最低下注金額檢查（餘額不足最低下注時免除限制）
+  const minBet = _getMinBet(state.currentBetType || 'win');
+  if (user.points >= minBet && amount < minBet) {
+    toast(`最低下注金額為 ${minBet} 點`);
+    const inp = document.getElementById('modal-amount');
+    inp.value = minBet;
+    updatePayout();
+    return;
+  }
   const {raceId} = state.pendingBet;
   if(!state.pendingBets) state.pendingBets = [];
 
@@ -1429,9 +1722,9 @@ function renderAdminOddsTable() {
 
   const winCells = activeRace.horses.map((h, i) => {
     const total = winPool[h.id] || 0;
-    return `<div class="win-cell" style="flex:1;min-width:0;background:var(--color-background-secondary);border-radius:10px;padding:8px 4px;text-align:center;cursor:default;">
+    return `<div class="win-cell" style="flex:0 0 auto;width:76px;background:var(--color-background-secondary);border-radius:10px;padding:8px 4px;text-align:center;cursor:default;">
       <div class="wc-num" style="font-size:calc(11px * var(--font-multiplier));color:var(--color-text-secondary);font-weight:600;margin-bottom:2px;">${idxToLetter(i)}</div>
-      <div style="font-size:calc(9px * var(--font-multiplier));color:var(--color-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;">${h.name}</div>
+      <div style="font-size:calc(9px * var(--font-multiplier));color:var(--color-text-tertiary);word-break:break-all;margin-bottom:2px;">${h.name}</div>
       <div class="wc-odds" style="font-size:calc(14px * var(--font-multiplier));font-weight:700;color:var(--color-text-primary);">${h.odds}x</div>
       ${total > 0 ? `<div style="font-size:calc(10px * var(--font-multiplier));color:#2563eb;font-weight:600;margin-top:2px;">💰${total}</div>` : ''}
     </div>`;
@@ -1484,7 +1777,9 @@ function renderAdminOddsTable() {
 
   return `<div class="page-content" style="padding:0 16px 24px;">
     <div class="section-title" style="margin-top:20px;">🏆 獨贏賠率表 &nbsp;<span style="font-size:calc(11px * var(--font-multiplier));font-weight:400;color:#6b7280;">總注額 ${totalWin}</span></div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;">${winCells}</div>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:16px;padding-bottom:4px;">
+      <div style="display:flex;gap:6px;width:max-content;">${winCells}</div>
+    </div>
 
     <div class="section-title">🔗 連贏賠率表 &nbsp;<span style="font-size:calc(11px * var(--font-multiplier));font-weight:400;color:#6b7280;">總注額 ${totalQ}</span></div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
@@ -1591,37 +1886,79 @@ function betSlip(bet) {
   </div>`;
 }
 
+function getTeamScore(teamId) {
+  return state.users.filter(u => u.teamId === teamId && u.role !== 'admin')
+    .reduce((s, u) => s + (u.points || 0), 0);
+}
+function getTeamPlayers(teamId) {
+  return state.users.filter(u => u.teamId === teamId && u.role !== 'admin');
+}
+function ensureTeams() {
+  if (!state.teams) state.teams = [];
+}
+
 function renderBoard() {
   const el = document.getElementById('page-board');
-  const ranked = state.users.filter(u=>u.role!=='admin').sort((a,b)=>b.points-a.points);
+  ensureTeams();
+  const teams = state.teams;
+  // 計算並排序組別總分
+  const rankedTeams = teams.map(t => ({ team: t, score: getTeamScore(t.id), players: getTeamPlayers(t.id) }))
+    .sort((a, b) => b.score - a.score);
+
+  const rankIcons = ['🥇','🥈','🥉'];
+
+  const teamsHtml = rankedTeams.length === 0
+    ? '<div class="empty-state">📂 尚未設定任何組別</div>'
+    : rankedTeams.map(({ team, score, players }, i) => {
+        const playersHtml = players.sort((a,b)=>b.points-a.points).map(p => `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 0 6px 42px;border-top:1px solid var(--color-border-tertiary);">
+            <div style="flex:1;font-size:calc(13px * var(--font-multiplier));color:var(--color-text-secondary);">${p.name}</div>
+            <div style="font-size:calc(13px * var(--font-multiplier));font-weight:600;color:var(--color-text-primary);">${p.points} pts</div>
+          </div>`).join('');
+        return `
+          <div style="background:var(--color-background-primary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-secondary);margin-bottom:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.02);">
+            <div class="leaderboard-row" style="border:none;padding:14px 16px;">
+              <div class="lb-rank">${rankIcons[i] || (i+1)}</div>
+              <div class="lb-avatar" style="background:${COLORS[team.color%COLORS.length]};color:${TEXT_COLORS[team.color%TEXT_COLORS.length]}">${team.name[0]}</div>
+              <div class="lb-name" style="font-weight:700;">${team.name}</div>
+              <div class="lb-pts" style="color:var(--primary);font-size:calc(16px * var(--font-multiplier));">${score} pts</div>
+            </div>
+            ${playersHtml}
+          </div>`;
+      }).join('');
+
+  // 未分組玩家
+  const orphans = state.users.filter(u => u.role !== 'admin' && !u.teamId);
+  const orphansHtml = orphans.length ? `
+    <p class="section-title" style="margin-top:16px;">── 未分組玩家 ──</p>
+    <div style="background:var(--color-background-primary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-secondary);padding:0 16px;margin-bottom:10px;">
+      ${orphans.sort((a,b)=>b.points-a.points).map((u,i,arr)=>`
+        <div class="leaderboard-row" style="${i===arr.length-1?'border:none;':''}">
+          <div class="lb-rank">${i+1}</div>
+          <div class="lb-avatar" style="background:${COLORS[u.color%COLORS.length]};color:${TEXT_COLORS[u.color%TEXT_COLORS.length]}">${u.name[0]}</div>
+          <div class="lb-name">${u.name}</div>
+          <div class="lb-pts">${u.points} pts</div>
+        </div>`).join('')}
+    </div>` : '';
+
   el.innerHTML = `
     <p class="section-title">📊 系統統計</p>
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">總建立場次</div><div class="stat-val">${state.races.length}</div></div>
       <div class="stat-card" style="background:var(--color-background-success)"><div class="stat-label" style="color:var(--color-text-success)">已完結場次</div><div class="stat-val" style="color:var(--color-text-success)">${state.races.filter(r=>r.status==='finished').length}</div></div>
     </div>
-    <p class="section-title">🏆 隊伍積分排行</p>
-    <div style="background:var(--color-background-primary); border-radius:var(--border-radius-md); padding: 0 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.02); border: 1px solid var(--color-border-secondary);">
-      ${ranked.map((u,i)=>{
-        const diff = u.points - 1000;
-        const diffClass = diff>0?'positive':diff<0?'negative':'';
-        return `<div class="leaderboard-row" style="${i===ranked.length-1?'border:none;':''}">
-          <div class="lb-rank">${i+1}</div>
-          <div class="lb-avatar" style="background:${COLORS[u.color%COLORS.length]};color:${TEXT_COLORS[u.color%TEXT_COLORS.length]}">${u.name[0]}</div>
-          <div class="lb-name">${u.name}</div>
-          <div class="lb-pts ${diffClass}">${u.points} pts</div>
-        </div>`;
-      }).join('')}
-    </div>
+    <p class="section-title">🏆 組別積分排行</p>
+    ${teamsHtml}
+    ${orphansHtml}
   `;
 }
 
 function renderHistory() {
   const user = getUser();
   const el = document.getElementById('page-history');
-  
+
   if (user.role === 'admin') {
-    el.innerHTML = '<div class="empty-state">管理員不參與遊玩<br><span style="font-size:calc(13px * var(--font-multiplier)); margin-top:8px; display:inline-block;">無法檢視個人紀錄</span></div>';
+    renderTeamSettings();
     return;
   }
 
@@ -1661,8 +1998,10 @@ function renderAdmin() {
         const details = hBets.map(b => {
           totalH += b.amount;
           const u = state.users.find(u2 => u2.id === b.userId) || {name:'未知'};
+          const uTeam = u.teamId ? (state.teams||[]).find(t=>t.id===u.teamId) : null;
+          const uLabel = uTeam ? `${uTeam.name}・${u.name}` : u.name;
           return `<div style="display:flex;justify-content:space-between;font-size:calc(13px * var(--font-multiplier));color:var(--color-text-secondary);padding:4px 0;">
-            <span>👤 ${u.name} (${b.type==='win'?'獨贏':'連贏'})</span>
+            <span>👤 ${uLabel} (${b.type==='win'?'獨贏':'連贏'})</span>
             <span style="font-weight:500;color:var(--color-text-primary);">${b.amount} pts</span>
           </div>`;
         }).join('');
@@ -1775,27 +2114,24 @@ function renderAdmin() {
       `)}
     </div>
 
-    <!-- 隊伍管理 -->
-    <p class="section-title">👥 隊伍管理</p>
+    <!-- 📹 直播控制 -->
+    <p class="section-title">📹 直播控制</p>
     <div class="admin-card">
-      <div style="margin-bottom:12px;">
-        ${state.users.filter(u=>u.role!=='admin').map(u=>`
-          <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--color-border-tertiary);">
-            <div style="width:34px;height:34px;border-radius:50%;background:${COLORS[u.color||0]};display:flex;align-items:center;justify-content:center;font-size:calc(14px * var(--font-multiplier));font-weight:700;color:#fff;flex-shrink:0;">${u.name.slice(0,1)}</div>
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:calc(14px * var(--font-multiplier));font-weight:600;color:var(--color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${u.name}</div>
-              <div style="font-size:calc(12px * var(--font-multiplier));color:var(--color-text-secondary);">${u.points} pts</div>
-            </div>
-            <button onclick="adminResetPoints('${u.id}')" style="padding:6px 10px;border:1px solid var(--color-border-secondary);border-radius:6px;font-size:calc(12px * var(--font-multiplier));background:var(--color-background-primary);cursor:pointer;color:var(--color-text-secondary);">重置積分</button>
-            <button onclick="adminDeleteUser('${u.id}','${u.name}')" style="padding:6px 10px;border:1px solid #fca5a5;border-radius:6px;font-size:calc(12px * var(--font-multiplier));background:#fff5f5;cursor:pointer;color:#dc2626;">刪除</button>
-          </div>`).join('')}
-        ${state.users.filter(u=>u.role!=='admin').length===0?`<div style="text-align:center;padding:16px 0;color:var(--color-text-tertiary);font-size:calc(14px * var(--font-multiplier));">尚無隊伍</div>`:''}
-      </div>
-      <div style="display:flex;gap:10px;margin-top:4px;">
-        <input type="text" id="admin-new-player-name" placeholder="新增隊伍名稱..." maxlength="12" style="flex:1;">
-        <input type="number" id="admin-new-player-pts" placeholder="初始積分" value="${getDefaultPoints()}" min="1" style="width:110px;flex:none;" oninput="saveDefaultPoints(this.value)">
-        <button onclick="adminAddUser()" style="padding:10px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--border-radius-sm);font-size:calc(14px * var(--font-multiplier));font-weight:600;cursor:pointer;white-space:nowrap;">新增</button>
-      </div>
+      ${_isBroadcasting ? `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <div class="live-dot"></div>
+          <span style="font-size:calc(14px * var(--font-multiplier));font-weight:700;color:#ef4444;">直播進行中</span>
+          <span style="font-size:calc(12px * var(--font-multiplier));color:var(--color-text-secondary);margin-left:4px;">觀看者裝置會自動顯示畫面</span>
+        </div>
+        <video id="broadcast-preview" autoplay playsinline muted style="width:100%;border-radius:8px;background:#000;max-height:180px;object-fit:cover;display:block;margin-bottom:12px;"></video>
+        <button onclick="stopBroadcast()" style="width:100%;padding:12px;background:#ef4444;color:#fff;border:none;border-radius:var(--border-radius-sm);font-size:calc(14px * var(--font-multiplier));font-weight:700;cursor:pointer;">⏹️ 停止直播</button>
+      ` : `
+        <div style="font-size:calc(13px * var(--font-multiplier));color:var(--color-text-secondary);margin-bottom:12px;line-height:1.6;">
+          點擊開始，此裝置的攝影機畫面將即時傳送到所有觀看者裝置。<br>
+          <span style="color:#16a34a;font-weight:600;">✓ 僅需同一 WiFi，完全免費</span>
+        </div>
+        <button onclick="startBroadcast()" style="width:100%;padding:12px;background:#16a34a;color:#fff;border:none;border-radius:var(--border-radius-sm);font-size:calc(14px * var(--font-multiplier));font-weight:700;cursor:pointer;">📹 開始直播</button>
+      `}
     </div>
 
     <!-- ➕ 建立多場賽事 -->
@@ -2277,11 +2613,203 @@ function adminDeleteUser(userId, userName) {
   if(!confirm(`確定要刪除隊伍「${userName}」？\n該隊伍的下注紀錄也會一併移除。`)) return;
   state.users = state.users.filter(u=>u.id!==userId);
   state.bets  = state.bets.filter(b=>b.userId!==userId);
-  // 清除該隊伍的待送出下注
   if(state.pendingBets) state.pendingBets = state.pendingBets.filter(b=>b.userId!==userId);
   save();
-  toast(`✅ 已刪除隊伍「${userName}」`);
+  toast(`✅ 已刪除「${userName}」`);
   renderAdmin();
+}
+
+// ============================================================
+// 👥 隊伍 / 玩家設定管理
+// ============================================================
+
+function renderTeamSettings() {
+  ensureTeams();
+  const el = document.getElementById('page-history');
+  const dp = getDefaultPoints();
+
+  const teamsHtml = state.teams.map(team => {
+    const players = getTeamPlayers(team.id);
+    const total = getTeamScore(team.id);
+    const playersHtml = players.map(p => `
+      <div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--color-border-tertiary);">
+        <div style="width:28px;height:28px;border-radius:50%;background:${COLORS[p.color%COLORS.length]};color:${TEXT_COLORS[p.color%TEXT_COLORS.length]};display:flex;align-items:center;justify-content:center;font-size:calc(12px * var(--font-multiplier));font-weight:700;flex-shrink:0;">${p.name[0]}</div>
+        <input id="rename-player-${p.id}" value="${p.name}" maxlength="12" style="flex:1;font-size:calc(13px * var(--font-multiplier));min-width:60px;">
+        <button onclick="adminRenamePlayer('${p.id}')" style="padding:5px 10px;background:var(--primary);color:#fff;border:none;border-radius:6px;font-size:calc(12px * var(--font-multiplier));cursor:pointer;white-space:nowrap;">改名</button>
+        <input id="set-points-${p.id}" type="number" value="${p.points}" min="0" style="width:72px;flex:none;font-size:calc(12px * var(--font-multiplier));padding:5px 6px;">
+        <button onclick="adminSetPlayerPoints('${p.id}')" style="padding:5px 10px;border:1px solid var(--color-border-secondary);border-radius:6px;font-size:calc(12px * var(--font-multiplier));cursor:pointer;background:#fff;color:var(--color-text-secondary);white-space:nowrap;">設定</button>
+        <button onclick="adminDeletePlayer('${p.id}')" style="padding:5px 8px;border:1px solid #fca5a5;border-radius:6px;font-size:calc(12px * var(--font-multiplier));background:#fff5f5;cursor:pointer;color:#dc2626;white-space:nowrap;">刪除</button>
+      </div>`).join('');
+
+    return `
+      <div class="admin-card" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--color-border-tertiary);flex-wrap:wrap;gap:8px;">
+          <div style="width:34px;height:34px;border-radius:50%;background:${COLORS[team.color%COLORS.length]};color:${TEXT_COLORS[team.color%TEXT_COLORS.length]};display:flex;align-items:center;justify-content:center;font-size:calc(14px * var(--font-multiplier));font-weight:700;flex-shrink:0;">${team.name[0]}</div>
+          <input id="rename-team-${team.id}" value="${team.name}" maxlength="12" style="flex:1;font-size:calc(14px * var(--font-multiplier));font-weight:600;min-width:80px;">
+          <button onclick="adminRenameTeam('${team.id}')" style="padding:6px 12px;background:var(--primary);color:#fff;border:none;border-radius:6px;font-size:calc(12px * var(--font-multiplier));cursor:pointer;white-space:nowrap;">改名</button>
+          <button onclick="adminResetTeamPoints('${team.id}')" style="padding:6px 10px;border:1px solid var(--color-border-secondary);border-radius:6px;font-size:calc(12px * var(--font-multiplier));cursor:pointer;background:#fff;color:var(--color-text-secondary);white-space:nowrap;">重置積分</button>
+          <button onclick="adminDeleteTeam('${team.id}')" style="padding:6px 10px;border:1px solid #fca5a5;border-radius:6px;font-size:calc(12px * var(--font-multiplier));background:#fff5f5;cursor:pointer;color:#dc2626;white-space:nowrap;">刪除組</button>
+        </div>
+        <div style="font-size:calc(12px * var(--font-multiplier));color:var(--color-text-secondary);margin-bottom:8px;">
+          總積分：<b style="color:var(--primary)">${total} pts</b>　共 ${players.length} 位玩家
+        </div>
+        ${playersHtml || `<div style="text-align:center;padding:8px 0;color:var(--color-text-tertiary);font-size:calc(13px * var(--font-multiplier));">此組尚無玩家</div>`}
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+          <input id="new-player-name-${team.id}" placeholder="新增玩家名稱..." maxlength="12" style="flex:2;min-width:100px;font-size:calc(13px * var(--font-multiplier));">
+          <input id="new-player-pts-${team.id}" type="number" placeholder="積分" value="${dp}" min="0" style="width:76px;flex:none;font-size:calc(12px * var(--font-multiplier));padding:8px 8px;">
+          <button onclick="adminAddPlayerToTeam('${team.id}')" style="padding:8px 14px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:calc(13px * var(--font-multiplier));cursor:pointer;white-space:nowrap;">➕ 玩家</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <p class="section-title">👥 隊伍 / 玩家設定</p>
+    <div class="admin-card" style="margin-bottom:20px;">
+      <div style="font-size:calc(14px * var(--font-multiplier));font-weight:600;margin-bottom:12px;">新增組別</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <input id="new-team-name" placeholder="組別名稱（例：組A）" maxlength="12" style="flex:2;min-width:120px;font-size:calc(13px * var(--font-multiplier));">
+        <input id="new-team-player-count" type="number" placeholder="玩家人數" value="5" min="1" max="30" style="width:90px;flex:none;font-size:calc(12px * var(--font-multiplier));padding:8px 8px;">
+        <input id="new-team-player-pts" type="number" placeholder="每人積分" value="${dp}" min="0" style="width:90px;flex:none;font-size:calc(12px * var(--font-multiplier));padding:8px 8px;" oninput="saveDefaultPoints(this.value)">
+        <button onclick="adminAddTeam()" style="padding:10px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--border-radius-sm);font-size:calc(13px * var(--font-multiplier));font-weight:600;cursor:pointer;white-space:nowrap;">建立組別</button>
+      </div>
+      <div style="font-size:calc(11px * var(--font-multiplier));color:var(--color-text-tertiary);margin-top:6px;">建立後可再個別修改玩家名稱、積分或刪除</div>
+    </div>
+    ${state.teams.length === 0
+      ? '<div class="empty-state">尚未設定任何組別<br><span style="font-size:calc(13px*var(--font-multiplier));margin-top:8px;display:inline-block;">使用上方表單建立第一個組別</span></div>'
+      : teamsHtml}
+    ${(()=>{
+      const orphans = state.users.filter(u => u.role !== 'admin' && !u.teamId);
+      if (!orphans.length) return '';
+      return `
+        <p class="section-title" style="margin-top:8px;color:#9ca3af;">── 未分組玩家 ──</p>
+        <div class="admin-card" style="border-color:#e5e7eb;background:#fafafa;">
+          <div style="font-size:calc(12px * var(--font-multiplier));color:var(--color-text-tertiary);margin-bottom:10px;">這些玩家未屬於任何組別，可直接刪除或移至下方設定後再管理。</div>
+          ${orphans.map(p => `
+            <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--color-border-tertiary);">
+              <div style="width:28px;height:28px;border-radius:50%;background:${COLORS[p.color%COLORS.length]};color:${TEXT_COLORS[p.color%TEXT_COLORS.length]};display:flex;align-items:center;justify-content:center;font-size:calc(12px * var(--font-multiplier));font-weight:700;flex-shrink:0;">${p.name[0]}</div>
+              <div style="flex:1;font-size:calc(13px * var(--font-multiplier));font-weight:500;">${p.name}</div>
+              <div style="font-size:calc(12px * var(--font-multiplier));color:var(--color-text-secondary);">${p.points} pts</div>
+              <button onclick="adminDeletePlayer('${p.id}')" style="padding:6px 12px;border:1px solid #fca5a5;border-radius:6px;font-size:calc(12px * var(--font-multiplier));background:#fff5f5;cursor:pointer;color:#dc2626;white-space:nowrap;">刪除</button>
+            </div>`).join('')}
+        </div>`;
+    })()}
+  `;
+}
+
+function adminAddTeam() {
+  ensureTeams();
+  const nameInp  = document.getElementById('new-team-name');
+  const countInp = document.getElementById('new-team-player-count');
+  const ptsInp   = document.getElementById('new-team-player-pts');
+  const name = (nameInp?.value || '').trim();
+  if (!name) { toast('請輸入組別名稱'); return; }
+  if (state.teams.find(t => t.name === name)) { toast('此組別名稱已存在'); return; }
+  const count  = Math.max(1, parseInt(countInp?.value) || 5);
+  const pts    = Math.max(0, parseInt(ptsInp?.value) || getDefaultPoints());
+  const teamId = 'team_' + Date.now();
+  const colorIdx = state.teams.length % COLORS.length;
+  state.teams.push({ id: teamId, name, color: colorIdx });
+  // 自動建立玩家（名稱：玩家1, 玩家2, ... 接續全局玩家總數）
+  const baseNum = state.users.filter(u => u.role !== 'admin').length + 1;
+  for (let i = 0; i < count; i++) {
+    state.users.push({
+      id: 'player_' + Date.now() + '_' + i,
+      name: `玩家${baseNum + i}`,
+      role: 'player',
+      points: pts,
+      color: colorIdx,
+      teamId
+    });
+  }
+  saveDefaultPoints(pts);
+  save();
+  toast(`✅ 已建立「${name}」，含 ${count} 位玩家`);
+  renderTeamSettings();
+}
+
+function adminDeleteTeam(teamId) {
+  ensureTeams();
+  const team = state.teams.find(t => t.id === teamId);
+  if (!team) return;
+  if (!confirm(`確定要刪除「${team.name}」及其所有玩家？\n相關下注紀錄也會移除。`)) return;
+  const playerIds = state.users.filter(u => u.teamId === teamId).map(u => u.id);
+  state.teams = state.teams.filter(t => t.id !== teamId);
+  state.users = state.users.filter(u => u.teamId !== teamId || u.role === 'admin');
+  state.bets  = state.bets.filter(b => !playerIds.includes(b.userId));
+  if (state.pendingBets) state.pendingBets = state.pendingBets.filter(b => !playerIds.includes(b.userId));
+  save();
+  toast(`✅ 已刪除組別「${team.name}」`);
+  renderTeamSettings();
+}
+
+function adminAddPlayerToTeam(teamId) {
+  const inp    = document.getElementById('new-player-name-' + teamId);
+  const ptsInp = document.getElementById('new-player-pts-' + teamId);
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) { toast('請輸入玩家名稱'); return; }
+  const pts  = Math.max(0, parseInt(ptsInp?.value) || getDefaultPoints());
+  const team = state.teams.find(t => t.id === teamId);
+  state.users.push({
+    id: 'player_' + Date.now(),
+    name, role: 'player',
+    points: pts, color: team?.color || 0, teamId
+  });
+  save();
+  toast(`✅ 已新增玩家「${name}」`);
+  renderTeamSettings();
+}
+
+function adminDeletePlayer(userId) {
+  const user = state.users.find(u => u.id === userId);
+  if (!user) return;
+  if (!confirm(`確定要刪除玩家「${user.name}」？`)) return;
+  state.users = state.users.filter(u => u.id !== userId);
+  state.bets  = state.bets.filter(b => b.userId !== userId);
+  if (state.pendingBets) state.pendingBets = state.pendingBets.filter(b => b.userId !== userId);
+  save();
+  toast(`✅ 已刪除玩家「${user.name}」`);
+  renderTeamSettings();
+}
+
+function adminRenameTeam(teamId) {
+  const inp = document.getElementById('rename-team-' + teamId);
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) { toast('請輸入組別名稱'); return; }
+  if (state.teams.find(t => t.name === name && t.id !== teamId)) { toast('此組別名稱已存在'); return; }
+  const team = state.teams.find(t => t.id === teamId);
+  if (team) { team.name = name; save(); toast('✅ 已更新組別名稱'); renderTeamSettings(); }
+}
+
+function adminRenamePlayer(userId) {
+  const inp = document.getElementById('rename-player-' + userId);
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) { toast('請輸入玩家名稱'); return; }
+  const user = state.users.find(u => u.id === userId);
+  if (user) { user.name = name; save(); toast('✅ 已更新玩家名稱'); renderTeamSettings(); }
+}
+
+function adminSetPlayerPoints(userId) {
+  const inp = document.getElementById('set-points-' + userId);
+  if (!inp) return;
+  const pts = parseInt(inp.value);
+  if (isNaN(pts) || pts < 0) { toast('請輸入有效積分（≥ 0）'); return; }
+  const user = state.users.find(u => u.id === userId);
+  if (user) { user.points = pts; save(); toast(`✅ 已更新「${user.name}」積分`); renderTeamSettings(); }
+}
+
+function adminResetTeamPoints(teamId) {
+  ensureTeams();
+  const team = state.teams.find(t => t.id === teamId);
+  if (!team) return;
+  const dp = getDefaultPoints();
+  if (!confirm(`確定要將「${team.name}」所有玩家積分重置為 ${dp}？`)) return;
+  state.users.filter(u => u.teamId === teamId).forEach(u => { u.points = dp; });
+  save();
+  toast(`✅ 已重置「${team.name}」所有玩家積分`);
+  renderTeamSettings();
 }
 
 function toggleRequirePassword() {
@@ -2298,6 +2826,7 @@ function clearAllData() {
   state.races = [];
   state.bets = [];
   state.activeRaceId = null;
+  // 重置所有玩家積分（保留組別和玩家設定）
   state.users.forEach(u=>{ if(u.role!=='admin') u.points = dp; });
   // 同步清除 JP 得獎記錄
   _jpWinners.length = 0;
@@ -2493,6 +3022,7 @@ STATE_REF.on('value', snapshot => {
 
     if (data) {
       if (data.users) state.users = data.users;
+      state.teams = Array.isArray(data.teams) ? data.teams : (data.teams ? Object.values(data.teams) : []);
       if (data.races) state.races = data.races;
       if (data.bets) state.bets = data.bets;
       if (data.activeRaceId !== undefined) state.activeRaceId = data.activeRaceId;
@@ -2557,6 +3087,7 @@ STATE_REF.on('value', snapshot => {
     const bt = state.currentBetType;
 
     if (data.users) state.users = data.users;
+    state.teams = Array.isArray(data.teams) ? data.teams : (data.teams ? Object.values(data.teams) : []);
     if (data.races) state.races = data.races;
     if (data.bets) state.bets = data.bets;
     if (data.activeRaceId !== undefined) state.activeRaceId = data.activeRaceId;
@@ -2706,6 +3237,7 @@ function adminSectionBody(key, html) {
           <li><strong>點擊啟動：</strong>點擊轉盤即可啟動。</li>
           <li><strong>雙向旋轉：</strong>外圈(馬匹)逆時針，內圈(命運)順時針旋轉！</li>
           <li><strong>分段開獎：</strong>外圈 3 秒先鎖定對象，內圈 6 秒揭曉命運。</li>
+          <li style="color:#0056b3;"><strong>特規：</strong>若指定馬匹為 <strong>K 馬</strong>，轉到「後退一步」或「後退兩步」時，<strong>同樣視為前進</strong>。</li>
         </ul>
       </div>
       <div>
