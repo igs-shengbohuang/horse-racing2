@@ -1152,6 +1152,16 @@ document.querySelector('.tab-bar').addEventListener('click', e=>{
   if(t) switchTab(t.dataset.tab);
 });
 
+// ── 摺疊/展開切換（登入畫面 & 排行榜共用）──
+function toggleCollapse(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const arrow = document.getElementById('arrow-' + id);
+  const isHidden = el.style.display === 'none';
+  el.style.display = isHidden ? '' : 'none';
+  if (arrow) arrow.style.transform = isHidden ? 'rotate(90deg)' : 'rotate(0deg)';
+}
+
 function avatar(user) {
   const c = COLORS[user.color%COLORS.length];
   const tc = TEXT_COLORS[user.color%TEXT_COLORS.length];
@@ -1173,10 +1183,11 @@ function renderLogin() {
       </div>
     </button>` : '';
 
-  // 各組列表
+  // 各組列表（預設縮起，點標題展開）
   const teamsHtml = teams.map(team => {
     const players = state.users.filter(u => u.teamId === team.id);
     const total = players.reduce((s, u) => s + (u.points || 0), 0);
+    const colId = 'login-team-' + team.id;
     const playersHtml = players.map(p => {
       const online = !!_activeSessions[p.id];
       return online
@@ -1196,12 +1207,15 @@ function renderLogin() {
           </button>`;
     }).join('');
     return `
-      <div style="margin-bottom:20px;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:8px 12px;background:${COLORS[team.color%COLORS.length]};border-radius:10px;">
+      <div style="margin-bottom:12px;">
+        <div onclick="toggleCollapse('${colId}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:${COLORS[team.color%COLORS.length]};border-radius:10px;cursor:pointer;user-select:none;">
+          <span id="arrow-${colId}" style="font-size:calc(14px * var(--font-multiplier));transition:transform 0.2s;display:inline-block;">▶</span>
           <span style="font-size:calc(15px * var(--font-multiplier));font-weight:700;color:${TEXT_COLORS[team.color%TEXT_COLORS.length]};">🏳️ ${team.name}</span>
-          <span style="font-size:calc(12px * var(--font-multiplier));color:${TEXT_COLORS[team.color%TEXT_COLORS.length]};margin-left:auto;">總積分 ${total} pts</span>
+          <span style="font-size:calc(12px * var(--font-multiplier));color:${TEXT_COLORS[team.color%TEXT_COLORS.length]};margin-left:auto;">${players.length} 人・${total} pts</span>
         </div>
-        <div style="display:grid;gap:8px;">${playersHtml || '<div style="text-align:center;padding:10px;color:#9ca3af;font-size:calc(13px*var(--font-multiplier));">此組尚無玩家</div>'}</div>
+        <div id="${colId}" style="display:none;padding:8px 0 0 0;">
+          <div style="display:grid;gap:8px;">${playersHtml || '<div style="text-align:center;padding:10px;color:#9ca3af;font-size:calc(13px*var(--font-multiplier));">此組尚無玩家</div>'}</div>
+        </div>
       </div>`;
   }).join('');
 
@@ -1440,9 +1454,9 @@ function raceCard(race) {
   // 連贏矩陣（上三角）
   // 第1匹馬不會出現在「右側欄」→ 欄位標頭跳過 j=0
   // 第8匹馬不會出現在「左側行」→ 行標籤跳過 i=7（最後一行）
-  const colH = `<th class="q-row-th" style="min-width:50px;"></th>` + race.horses.slice(1).map((h,idx)=>{
-    const j = idx+1;
-    return `<th class="q-col-th" style="font-size:calc(11px * var(--font-multiplier));text-align:center;padding:2px;color:#111827;font-weight:700;min-width:48px;background:rgba(255,255,255,0.82);border-radius:6px;">${idxToLetter(j)}<br><span style="font-size:calc(9px * var(--font-multiplier));font-weight:500;">${h.name.slice(0,4)}</span></th>`;
+  // 欄標頭：只顯示馬匹名稱，不顯示字母編號
+  const colH = `<th style="min-width:70px;position:sticky;left:0;z-index:3;background:rgba(240,240,240,0.95);"></th>` + race.horses.slice(1).map((h,idx)=>{
+    return `<th class="q-col-th" style="font-size:calc(11px * var(--font-multiplier));text-align:center;padding:4px 2px;color:#111827;font-weight:700;min-width:58px;background:rgba(255,255,255,0.92);border-radius:6px;">${h.name}</th>`;
   }).join('');
   const qRows = race.horses.slice(0,-1).map((h1,i)=>{
     // 欄從 j=1 開始（跳過 j=0），對應 horses[1..7]
@@ -1462,7 +1476,8 @@ function raceCard(race) {
       const oc = canBet ? `onclick="openBet('${race.id}','${h1.id}','quinella','${h2.id}')"` : '';
       return `<td style="padding:2px;"><div class="q-cell" style="background:${bg};color:${tc};border:1.5px solid ${br};border-radius:6px;padding:5px 2px;text-align:center;cursor:${cur};font-size:calc(12px * var(--font-multiplier));font-weight:700;user-select:none;" ${oc}>${odds}x${qArr}${pd?`<br><span style="font-size:calc(10px * var(--font-multiplier));">✏️${pd.amount}${pdList.length>1?` +${pdList.length-1}`:''}</span>`:''}${lk&&!pd?`<br><span style="font-size:calc(10px * var(--font-multiplier));">✔${lk.amount}</span>`:''}</div></td>`;
     }).join('');
-    return `<tr><td class="q-row-th" style="font-size:calc(11px * var(--font-multiplier));padding:2px 6px;white-space:nowrap;color:#111827;font-weight:700;vertical-align:middle;background:rgba(255,255,255,0.82);border-radius:6px;">${idxToLetter(i)}.${h1.name.slice(0,4)}</td>${cells}</tr>`;
+    // 列標頭：只顯示馬匹名稱，凍結在左側
+    return `<tr><td class="q-row-th" style="font-size:calc(11px * var(--font-multiplier));padding:4px 8px;white-space:nowrap;color:#111827;font-weight:700;vertical-align:middle;background:rgba(240,240,240,0.95);border-radius:6px;position:sticky;left:0;z-index:2;">${h1.name}</td>${cells}</tr>`;
   }).join('');
 
   const resultBanner = race.status==='finished'&&race.result
@@ -2007,6 +2022,7 @@ function renderBoard() {
   const teamsHtml = rankedTeams.length === 0
     ? '<div class="empty-state">📂 尚未設定任何組別</div>'
     : rankedTeams.map(({ team, score, players }, i) => {
+        const colId = 'board-team-' + team.id;
         const playersHtml = players.sort((a,b)=>b.points-a.points).map(p => `
           <div style="display:flex;align-items:center;gap:8px;padding:6px 0 6px 42px;border-top:1px solid var(--color-border-tertiary);">
             <div style="flex:1;font-size:calc(13px * var(--font-multiplier));color:var(--color-text-secondary);">${p.name}</div>
@@ -2014,13 +2030,18 @@ function renderBoard() {
           </div>`).join('');
         return `
           <div style="background:var(--color-background-primary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-secondary);margin-bottom:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.02);">
-            <div class="leaderboard-row" style="border:none;padding:14px 16px;">
+            <div class="leaderboard-row" style="border:none;padding:14px 16px;cursor:pointer;user-select:none;" onclick="toggleCollapse('${colId}')">
               <div class="lb-rank">${rankIcons[i] || (i+1)}</div>
               <div class="lb-avatar" style="background:${COLORS[team.color%COLORS.length]};color:${TEXT_COLORS[team.color%TEXT_COLORS.length]}">${team.name[0]}</div>
               <div class="lb-name" style="font-weight:700;">${team.name}</div>
-              <div class="lb-pts" style="color:var(--primary);font-size:calc(16px * var(--font-multiplier));">${score} pts</div>
+              <div class="lb-pts" style="color:var(--primary);font-size:calc(16px * var(--font-multiplier));display:flex;align-items:center;gap:8px;">
+                ${score} pts
+                <span id="arrow-${colId}" style="font-size:calc(12px * var(--font-multiplier));color:#9ca3af;transition:transform 0.2s;display:inline-block;">▶</span>
+              </div>
             </div>
-            ${playersHtml}
+            <div id="${colId}" style="display:none;">
+              ${playersHtml}
+            </div>
           </div>`;
       }).join('');
 
